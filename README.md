@@ -8,6 +8,7 @@ This is for my future reference
 ## Deployment
 
 Start Docker Desktop 
+
 Start WSL 
 
 
@@ -15,10 +16,15 @@ Start WSL
 ## Deploy Kong
 
 helm repo add kong https://charts.konghq.com
+
 helm repo update
+
 helm install kong kong/ingress -n kong --create-namespace
+
 helm ls -A
+
 curl -v http://localhost
+
 
 ## Deploy Custom APP
 
