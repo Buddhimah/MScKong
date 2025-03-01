@@ -33,3 +33,9 @@ kubectl apply -f .\ingress.yaml
 kubectl apply -f .\service.yaml
 
 curl -v http://localhost/echo
+
+## Deploy Custom LUA logic 
+
+kubectl apply -f custom-routing-configmap.yaml
+kubectl apply -f custom-routing-plugin.yaml
+helm upgrade kong kong/kong --set customPlugins={custom-routing}
