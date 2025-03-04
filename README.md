@@ -42,8 +42,29 @@ curl -v http://localhost/echo
 
 ## Deploy Custom LUA logic 
 
-kubectl apply -f custom-routing-configmap.yaml
+### Create Config Map
 
-kubectl apply -f custom-routing-plugin.yaml
+Navigate to kong-plugin-myheader/ folder.
 
-helm upgrade kong kong/kong --set customPlugins={custom-routing}
+kubectl create configmap kong-plugin-myheader --from-file=myheader -n kong
+
+### Enable Custom Plugins
+
+Clone https://github.com/Kong/charts/blob/main/charts/ingress/values.yaml
+
+Add following section to the values.yaml 
+
+gateway:
+  plugins:
+    configMaps:
+    - name: kong-plugin-myheader
+      pluginName: myheader
+
+ helm upgrade kong kong/ingress -n kong --values values.yaml
+
+### Create  KongPlugin
+
+Navigate to kong-plugin-myheader/ folder.
+
+kubectl apply -f .\kongplugin.yaml
+
