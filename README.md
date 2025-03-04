@@ -68,3 +68,7 @@ Navigate to kong-plugin-myheader/ folder.
 
 kubectl apply -f .\kongplugin.yaml
 
+## TEST
+
+Send a GET request using POSTMAN to http://localhost/echo check the response header for myheader
+
