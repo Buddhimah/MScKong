@@ -77,3 +77,29 @@ kubectl apply -f .\kongplugin.yaml
 
 Send a GET request using POSTMAN to http://localhost/echo check the response header for myheader
 
+## Update Upstream 
+
+```
+local MyHeader = {}
+
+MyHeader.PRIORITY = 1000
+MyHeader.VERSION = "1.0.0"
+
+-- Access Phase: Set upstream service
+function MyHeader:access(conf)
+    local service = kong.router.get_service()
+    kong.log("################################ Upstream Host: ", service.host)
+    kong.service.set_target("nginx-service.default.svc.cluster.local", 80)
+    kong.service.request.set_path("/")  -- Keep the same path (or modify if needed)
+end
+
+-- Header Filter Phase: Set response header
+function MyHeader:header_filter(conf)
+    kong.log("################################# Setting response header")
+    kong.response.set_header("buddhima123", conf.header_value)
+end
+
+return MyHeader
+```
+
+
