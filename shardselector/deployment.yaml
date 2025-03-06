@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sharding-app
+  namespace: kong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sharding
+  template:
+    metadata:
+      labels:
+        app: sharding
+    spec:
+      containers:
+      - name: sharding
+        image:  buddhima/uuid:v1.0.1  # Using the locally built image
+        imagePullPolicy: Never  # Prevents Kubernetes from trying to pull from a remote registry
+        ports:
+        - containerPort: 8080
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sharding-service
+  namespace: kong
+spec:
+  selector:
+    app: sharding
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP  # Internal service only, no external access
