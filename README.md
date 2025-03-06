@@ -102,4 +102,16 @@ end
 return MyHeader
 ```
 
+## Shard Selector Micro Service 
+
+Go to PATH : MSCProject\MScKong\shardselector\GoModule
+
+You can Build Docker file by 
+
+```
+docker build -t buddhima/uuid:v1.0.1 .
+```
+
+Deploy it using the deployment.yaml in MSCProject\MScKong\shardselector
+
 
