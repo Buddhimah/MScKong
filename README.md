@@ -127,6 +127,21 @@ You can Build Docker file by
 
 Deploy it using the deployment.yaml 
 
+### TEST
+
+```
+http://localhost/flask-api/memory-intensive
+```
+
+```
+http://localhost/flask-api/cpu-intensive
+```
+
+```
+http://localhost/flask-api/io-intensive
+```
+
+
 ## Perfoamce TEST tool 
 
 Go to PATH: MScKong\perfscripts
