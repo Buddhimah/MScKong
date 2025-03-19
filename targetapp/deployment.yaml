@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+    spec:
+      containers:
+      - name: flask-app
+        image: flask-performance-app:v1.0.0 # Change this if using a remote registry
+        imagePullPolicy: Never  # Prevents Kubernetes from trying to pull from a remote registry
+        ports:
+        - containerPort: 5000
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+          requests:
+            cpu: "250m"
+            memory: "128Mi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-app-service
+spec:
+  selector:
+    app: flask-app
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flask-app-ingress
+  annotations:
+    konghq.com/strip-path: "true"  # Remove the prefix before forwarding requests
+spec:
+  ingressClassName: kong
+  rules:
+  - host: localhost  # Change this if needed
+    http:
+      paths:
+      - path: /flask-api
+        pathType: Prefix
+        backend:
+          service:
+            name: flask-app-service
+            port:
+              number: 5000
+

@@ -115,3 +115,29 @@ docker build -t buddhima/uuid:v1.0.1 .
 Deploy it using the deployment.yaml in MSCProject\MScKong\shardselector
 
 
+## Application Micro Service 
+
+Go to PATH: MScKong\targetapp
+
+You can Build Docker file by 
+
+```
+ docker build -t flask-performance-app:v1.0.0 .
+```
+
+Deploy it using the deployment.yaml 
+
+## Perfoamce TEST tool 
+
+Go to PATH: MScKong\perfscripts
+
+Install Locust 
+
+```
+pip install locust
+```
+
+locust -f locustfile.py --host http://127.0.0.1:5000
+
+
+
