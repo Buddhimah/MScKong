@@ -155,4 +155,27 @@ pip install locust
 locust -f locustfile.py --host http://127.0.0.1:5000
 
 
+## Promethues
 
+```
+kubectl get svc
+```
+
+```
+kubectl port-forward svc/prometheus-operated 9090:9090
+```
+
+```
+kubectl port-forward svc/prometheus-grafana 9090:80
+```
+
+https://chatgpt.com/c/67e954d1-8f94-800b-aaf7-a43ee46fa0d6
+https://chatgpt.com/c/68026f3a-5474-800b-9965-c1e11cc22549
+
+
+kubectl port-forward svc/prometheus-kube-prometheus-prometheus 91:9090
+
+curl --location --globoff --request GET 'http://localhost:91/api/v1/query?query=sum%20by%20(pod)%20(rate(container_cpu_usage_seconds_total{pod%3D~%22flask-app.*%22%2C%20namespace%3D%22default%22%2C%20container!%3D%22POD%22}[1m]))' \
+--header 'Content-Type: application/x-www-form-urlencoded' \
+--header 'Authorization: Basic YWRtaW46cHJvbS1vcGVyYXRvcg==' \
+--data-urlencode 'query=sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~"flask-app.*", namespace="default", container!="POD"}[1m]))'
