@@ -15,10 +15,19 @@ spec:
     spec:
       containers:
       - name: sharding
-        image:  buddhima/uuid:v1.0.1  # Using the locally built image
-        imagePullPolicy: Never  # Prevents Kubernetes from trying to pull from a remote registry
+        image: buddhima/uuid:v1.0.1
+        imagePullPolicy: Never
         ports:
         - containerPort: 8080
+        env:
+        - name: MAX_CPU
+          value: "1.0"
+        - name: MAX_MEMORY
+          value: "536870912"   # 0.5GB in bytes
+        - name: MAX_IO
+          value: "524288000"    # 500MB in bytes
+        - name: PROMETHEUS_BASE_URL
+          value: "http://prometheus-service.kong:9090"  # Example K8s service for Prometheus
 
 ---
 apiVersion: v1
@@ -33,4 +42,4 @@ spec:
   - protocol: TCP
     port: 8080
     targetPort: 8080
-  type: ClusterIP  # Internal service only, no external access
+  type: ClusterIP

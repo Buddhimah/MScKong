@@ -55,12 +55,22 @@ var (
 	maxCPU    float64
 	maxMemory float64
 	maxIO     float64
+	prometheusBaseURL string
 )
 
 func init() {
-	maxCPU = getEnvAsFloat("MAX_CPU", 2.0)
-	maxMemory = getEnvAsFloat("MAX_MEMORY", 2*1024*1024*1024) // 2GB
+	maxCPU = getEnvAsFloat("MAX_CPU", 1.0)
+	maxMemory = getEnvAsFloat("MAX_MEMORY", 0.5*1024*1024*1024) // 2GB
 	maxIO = getEnvAsFloat("MAX_IO", 500*1024*1024)            // 500MB
+	prometheusBaseURL = getEnv("PROMETHEUS_BASE_URL", "http://localhost:91")
+}
+
+func getEnv(key string, defaultVal string) string {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	return val
 }
 
 func getEnvAsFloat(key string, defaultVal float64) float64 {
@@ -126,9 +136,9 @@ func buildShards() []Shard {
 	shards := []Shard{}
 
 	for _, ns := range namespaces {
-		cpuMetrics := fetchMetric("http://localhost:91", fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s", container!="POD"}[1m]))`, ns))
-		memMetrics := fetchMetric("http://localhost:91", fmt.Sprintf(`sum(container_memory_usage_bytes{namespace="%s"})`, ns))
-		ioMetrics := fetchMetric("http://localhost:91", fmt.Sprintf(`sum(container_fs_reads_bytes_total{namespace="%s"})`, ns))
+		cpuMetrics := fetchMetric(prometheusBaseURL, fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s", container!="POD"}[1m]))`, ns))
+		memMetrics := fetchMetric(prometheusBaseURL, fmt.Sprintf(`sum(container_memory_usage_bytes{namespace="%s"})`, ns))
+		ioMetrics := fetchMetric(prometheusBaseURL, fmt.Sprintf(`sum(container_fs_reads_bytes_total{namespace="%s"})`, ns))
 
 		// Since sum returns a single value per namespace, fetch from map
 		var cpuUsage, memUsage, ioUsage float64
@@ -217,11 +227,11 @@ func updateShardSelection() {
 func startShardUpdater() {
 	intervalStr := os.Getenv("UPDATE_INTERVAL_SECONDS")
 	if intervalStr == "" {
-		intervalStr = "30"
+		intervalStr = "60"
 	}
 	interval, err := strconv.Atoi(intervalStr)
 	if err != nil || interval <= 0 {
-		interval = 30
+		interval = 60
 	}
 	updateInterval = time.Duration(interval) * time.Second
 

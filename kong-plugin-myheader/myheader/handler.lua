@@ -10,6 +10,7 @@ function MyHeader:access(conf)
 
     -- Retrieve the 'type' header from the incoming request
     local request_type = ngx.req.get_headers()["type"]
+    local original_path = kong.request.get_path()
     kong.log("Request Type: ", request_type)
 
     -- Default to "simple_read" if the header is not provided
@@ -52,15 +53,15 @@ function MyHeader:access(conf)
     kong.log("[myheader] Selected Shard: ", selected_shard)
 
     -- Set upstream based on shard selection
-    if selected_shard == "S3" then
-        kong.service.set_target("nginx-service.default.svc.cluster.local", 80)
-        kong.service.request.set_path("/") 
-    elseif selected_shard == "S2" then
-        kong.service.set_target("nginx-service.default.svc.cluster.local", 80)
-        kong.service.request.set_path("/") 
-    elseif selected_shard == "S1" then
-        -- Another action for S1
+    if selected_shard == "shard1" then
+        kong.service.set_target("flask-app-service.shard1.svc.cluster.local", 80)
+        kong.service.request.set_path(original_path) 
+    elseif selected_shard == "shard2" then
+        kong.service.set_target("flask-app-service.shard2.svc.cluster.local", 80)
+        kong.service.request.set_path(original_path) 
     else
+        kong.service.set_target("flask-app-service.shard1.svc.cluster.local", 80)
+        kong.service.request.set_path(original_path) 
         -- Default action if none of the conditions match
     end
     
@@ -68,7 +69,7 @@ end
 
 function MyHeader:header_filter(conf)
     kong.log.notice("[myheader] Setting response header")
-    kong.response.set_header("buddhima123", conf.header_value)
+    kong.response.set_header("buddhima", conf.header_value)
 end
 
 return MyHeader
