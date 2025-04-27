@@ -122,36 +122,32 @@ func fetchMetric(baseURL string, query string) map[string]float64 {
 }
 
 func buildShards() []Shard {
-	namespaces := []string{"shard1", "shard2"}
+	cpuMetrics := fetchMetric("http://localhost:91", `sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~"flask-app.*", namespace="default", container!="POD"}[1m]))`)
+	memMetrics := fetchMetric("http://localhost:91", `sum by (pod) (container_memory_usage_bytes{pod=~"flask-app.*", namespace="default"})`)
+	ioMetrics := fetchMetric("http://localhost:91", `sum by (pod) (container_fs_reads_bytes_total{pod=~"flask-app.*", namespace="default"})`)
+
 	shards := []Shard{}
+	uniquePods := map[string]bool{}
+	for pod := range cpuMetrics {
+		uniquePods[pod] = true
+	}
+	for pod := range memMetrics {
+		uniquePods[pod] = true
+	}
+	for pod := range ioMetrics {
+		uniquePods[pod] = true
+	}
 
-	for _, ns := range namespaces {
-		cpuMetrics := fetchMetric("http://localhost:91", fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s", container!="POD"}[1m]))`, ns))
-		memMetrics := fetchMetric("http://localhost:91", fmt.Sprintf(`sum(container_memory_usage_bytes{namespace="%s"})`, ns))
-		ioMetrics := fetchMetric("http://localhost:91", fmt.Sprintf(`sum(container_fs_reads_bytes_total{namespace="%s"})`, ns))
-
-		// Since sum returns a single value per namespace, fetch from map
-		var cpuUsage, memUsage, ioUsage float64
-		for _, v := range cpuMetrics {
-			cpuUsage = v
-		}
-		for _, v := range memMetrics {
-			memUsage = v
-		}
-		for _, v := range ioMetrics {
-			ioUsage = v
-		}
-
+	for pod := range uniquePods {
 		shards = append(shards, Shard{
-			Name:        ns,
-			CPUUsage:    cpuUsage,
-			MemoryUsage: memUsage,
-			IOUsage:     ioUsage,
+			Name:        pod,
+			CPUUsage:    cpuMetrics[pod],
+			MemoryUsage: memMetrics[pod],
+			IOUsage:     ioMetrics[pod],
 		})
 	}
 	return shards
 }
-
 
 func getShardScore(shard Shard, demand RequestType) float64 {
 	normalizedCPU := min(shard.CPUUsage/maxCPU, 1)
