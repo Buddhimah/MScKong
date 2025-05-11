@@ -1,3 +1,5 @@
+
+
 local MyHeader = {}
 local http = require "resty.http"
 local cjson = require "cjson.safe"
@@ -10,7 +12,10 @@ function MyHeader:access(conf)
 
     -- Retrieve the 'type' header from the incoming request
     local request_type = ngx.req.get_headers()["type"]
-    local original_path = kong.request.get_path()
+    local path = kong.request.get_path() -- e.g. /flask-api/io-intensive
+    local query = kong.request.get_raw_query() -- e.g. size=1
+    local modified_path = string.gsub(path, "^/flask%-api", "")
+    
     kong.log("Request Type: ", request_type)
 
     -- Default to "simple_read" if the header is not provided
@@ -54,14 +59,17 @@ function MyHeader:access(conf)
 
     -- Set upstream based on shard selection
     if selected_shard == "shard1" then
-        kong.service.set_target("flask-app-service.shard1.svc.cluster.local", 80)
-        kong.service.request.set_path(original_path) 
+        kong.service.set_target("flask-app-service.shard1.svc.cluster.local", 5000)
+        kong.service.request.set_path(modified_path)
+        kong.service.request.set_raw_query(query)
     elseif selected_shard == "shard2" then
-        kong.service.set_target("flask-app-service.shard2.svc.cluster.local", 80)
-        kong.service.request.set_path(original_path) 
+        kong.service.set_target("flask-app-service.shard2.svc.cluster.local", 5000)
+        kong.service.request.set_path(modified_path)
+        kong.service.request.set_raw_query(query)
     else
-        kong.service.set_target("flask-app-service.shard1.svc.cluster.local", 80)
-        kong.service.request.set_path(original_path) 
+        kong.service.set_target("flask-app-service.shard1.svc.cluster.local", 5000)
+        kong.service.request.set_path(modified_path)
+        kong.service.request.set_raw_query(query)
         -- Default action if none of the conditions match
     end
     
@@ -73,3 +81,25 @@ function MyHeader:header_filter(conf)
 end
 
 return MyHeader
+
+
+--[[ Uncomment for shard selection algo
+
+
+
+local MyHeader = {}
+local http = require "resty.http"
+local cjson = require "cjson.safe"
+
+MyHeader.PRIORITY = 1000
+MyHeader.VERSION = "1.0.0"
+
+
+function MyHeader:header_filter(conf)
+    kong.log.notice("[myheader] Setting response header")
+    kong.response.set_header("buddhima", conf.header_value)
+end
+
+return MyHeader
+
+-- ]]

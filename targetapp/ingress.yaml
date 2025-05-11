@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    konghq.com/strip-path: "true"
+    konghq.com/plugins: my-custom-plugin
+  generation: 2
+  name: flask-app-ingress
+  namespace: default
+spec:
+  ingressClassName: kong
+  rules:
+  - host: mscbuddhima.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: flask-app-service
+            port:
+              number: 5000
+        path: /flask-api
+        pathType: Prefix

@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
       - name: sharding
-        image: buddhima/uuid:v1.0.1
-        imagePullPolicy: Never
+        image: buddhimah/uuid:v1.0.2
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
         env:
@@ -27,7 +27,7 @@ spec:
         - name: MAX_IO
           value: "524288000"    # 500MB in bytes
         - name: PROMETHEUS_BASE_URL
-          value: "http://prometheus-service.kong:9090"  # Example K8s service for Prometheus
+          value: "http://prometheus-kube-prometheus-prometheus.default.svc.cluster.local:9090"  # Example K8s service for Prometheus
 
 ---
 apiVersion: v1
