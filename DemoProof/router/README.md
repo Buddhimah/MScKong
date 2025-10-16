@@ -1,0 +1,1 @@
+docker run --rm -p 8081:8081 buddhimah/routerv2.0:latest
