@@ -1,3 +1,7 @@
+docker build -t buddhimah/demo-app:3.0.0 .
+ docker push buddhimah/demo-app:3.0.0
+
+
 # Resource group & cluster
 az group create -n rg-routing -l centralus
 az aks create -n aks-routing -g rg-routing --location centralus --node-count 1 --node-vm-size Standard_B2ms --generate-ssh-keys

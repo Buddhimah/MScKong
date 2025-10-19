@@ -15,7 +15,7 @@ spec:
       nodeSelector: { agentpool: cpu }
       containers:
       - name: demo
-        image: buddhimah/demoappv2.0
+        image: buddhimah/demo-app:4.0.0
         ports: [{containerPort: 8080}]
         env:
         - name: SHARD_ID
@@ -54,7 +54,7 @@ spec:
       nodeSelector: { agentpool: mem }
       containers:
       - name: demo
-        image: buddhimah/demoappv2.0
+        image: buddhimah/demo-app:4.0.0
         ports: [{containerPort: 8080}]
         env:
         - name: SHARD_ID
@@ -93,7 +93,7 @@ spec:
       nodeSelector: { agentpool: io }
       containers:
       - name: demo
-        image: buddhimah/demoappv2.0
+        image: buddhimah/demo-app:4.0.0
         ports: [{containerPort: 8080}]
         env:
         - name: SHARD_ID
