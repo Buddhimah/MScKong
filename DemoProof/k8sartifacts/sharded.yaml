@@ -1,0 +1,206 @@
+# policy-shards-router.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-shard
+  namespace: policy
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: demo-app, shard: cpu }
+  template:
+    metadata:
+      labels: { app: demo-app, shard: cpu }
+    spec:
+      nodeSelector: { agentpool: cpu }
+      containers:
+      - name: demo
+        image: buddhimah/demoappv2.0
+        ports: [{containerPort: 8080}]
+        env:
+        - name: SHARD_ID
+          value: "cpu"
+        - name: CACHE_TTL_SEC
+          value: "1200"
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 2
+          periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpu-shard
+  namespace: policy
+spec:
+  selector: { app: demo-app, shard: cpu }
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mem-shard
+  namespace: policy
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: demo-app, shard: mem }
+  template:
+    metadata:
+      labels: { app: demo-app, shard: mem }
+    spec:
+      nodeSelector: { agentpool: mem }
+      containers:
+      - name: demo
+        image: buddhimah/demoappv2.0
+        ports: [{containerPort: 8080}]
+        env:
+        - name: SHARD_ID
+          value: "mem"
+        - name: CACHE_TTL_SEC
+          value: "1200"
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 2
+          periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mem-shard
+  namespace: policy
+spec:
+  selector: { app: demo-app, shard: mem }
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: io-shard
+  namespace: policy
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: demo-app, shard: io }
+  template:
+    metadata:
+      labels: { app: demo-app, shard: io }
+    spec:
+      nodeSelector: { agentpool: io }
+      containers:
+      - name: demo
+        image: buddhimah/demoappv2.0
+        ports: [{containerPort: 8080}]
+        env:
+        - name: SHARD_ID
+          value: "io"
+        - name: CACHE_TTL_SEC
+          value: "1200"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 2
+          periodSeconds: 2
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: io-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: io-shard
+  namespace: policy
+spec:
+  selector: { app: demo-app, shard: io }
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: router
+  namespace: policy
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: router }
+  template:
+    metadata:
+      labels: { app: router }
+    spec:
+      containers:
+      - name: router
+        image: buddhimah/routerv2.0
+        ports: [{containerPort: 8081}]
+        env:
+        - name: CPU_SVC
+          value: "http://cpu-shard.policy.svc.cluster.local:8080"
+        - name: MEM_SVC
+          value: "http://mem-shard.policy.svc.cluster.local:8080"
+        - name: IO_SVC
+          value: "http://io-shard.policy.svc.cluster.local:8080"
+        - name: BETA_LOAD
+          value: "1.0"
+        - name: GAMMA_LOCALITY
+          value: "0.5"
+        - name: T_CPU
+          value: "0.80"
+        - name: T_MEM
+          value: "0.80"
+        - name: T_IO
+          value: "0.80"
+        - name: W
+          value: "90"
+        - name: TAU
+          value: "0.10"
+        - name: STICKY_TTL
+          value: "1200"
+        - name: F
+          value: "20"
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8081 }
+          initialDelaySeconds: 2
+          periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: router
+  namespace: policy
+spec:
+  selector: { app: router }
+  ports:
+  - port: 80
+    targetPort: 8081
+---
+# Ingress to router (sticky cookie enabled)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: policy-ing
+  namespace: policy
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "router-sticky"
+    nginx.ingress.kubernetes.io/session-cookie-path: "/"
+spec:
+  rules:
+  - host: policy.localtest.me
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: router
+            port:
+              number: 80

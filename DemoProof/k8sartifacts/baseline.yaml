@@ -1,0 +1,60 @@
+# baseline.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-baseline
+  namespace: baseline
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: demo-app }
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      containers:
+      - name: demo
+        image: buddhimah/demoappv2.0
+        ports: [{containerPort: 8080}]
+        env:
+        - name: SHARD_ID
+          value: "baseline"
+        - name: CACHE_TTL_SEC
+          value: "600"
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 2
+          periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-baseline-svc
+  namespace: baseline
+spec:
+  selector: { app: demo-app }
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+# Ingress to baseline service (no stickiness)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: baseline-ing
+  namespace: baseline
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+  - host: baseline.localtest.me
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: demo-baseline-svc
+            port:
+              number: 8080

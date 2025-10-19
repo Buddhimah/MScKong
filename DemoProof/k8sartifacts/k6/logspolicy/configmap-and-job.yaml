@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-script
+  namespace: policy
+data:
+  test.js: |
+    import http from 'k6/http';
+    import { sleep } from 'k6';
+    import exec from 'k6/execution';
+
+    // Params
+    const USERS_TOTAL = 2000;
+    const AUTH_USERS = 1000;
+    const FEAT_USERS = 600;
+    const DOC_USERS  = 400;
+    const DOCS_TOTAL = 400;
+
+    // Zipfian helper (approx)
+    function zipf(n, s=1.1){
+      const u = Math.random();
+      let sum = 0, c = 0;
+      for (let k=1;k<=n;k++) sum += 1/Math.pow(k,s);
+      const r = u*sum;
+      for (let k=1;k<=n;k++){
+        c += 1/Math.pow(k,s);
+        if (c >= r) return k; // 1..n
+      }
+      return n;
+    }
+
+    // mix & phases controlled by ENV
+    const BASE_HOST = __ENV.BASE_HOST; // e.g. http://policy.localtest.me
+    const POLICY = __ENV.POLICY === 'true';
+
+    // traffic mix
+    const MIX = [{type:'auth', p:0.50}, {type:'features', p:0.30}, {type:'document', p:0.20}];
+
+    // choose endpoint by probabilities
+    function pickEndpoint(){
+      const u = Math.random();
+      let c = 0;
+      for (const m of MIX){ c += m.p; if (u<=c) return m.type; }
+      return 'auth';
+    }
+
+    // phases: warmup 2m@20 RPS; steady 10m@60 RPS; spike 2m@120 RPS
+    export const options = {
+      scenarios: {
+        warmup: {
+          executor: 'constant-arrival-rate',
+          rate: 20,
+          timeUnit: '1s',
+          duration: '2m',
+          preAllocatedVUs: 20,
+          maxVUs: 100,
+        },
+        steady: {
+          executor: 'constant-arrival-rate',
+          rate: 60,
+          timeUnit: '1s',
+          duration: '10m',
+          preAllocatedVUs: 60,
+          maxVUs: 200,
+          startTime: '2m',
+        },
+        spike: {
+          executor: 'constant-arrival-rate',
+          rate: 120,
+          timeUnit: '1s',
+          duration: '2m',
+          preAllocatedVUs: 120,
+          maxVUs: 300,
+          startTime: '12m',
+        }
+      }
+    };
+
+    function pickUser(type){
+      if (type==='auth')   return 'a'+zipf(AUTH_USERS);
+      if (type==='features') return 'f'+zipf(FEAT_USERS);
+      return 'd'+zipf(DOC_USERS); // user id for document path still a user concept
+    }
+
+    function pickDoc(){ return 'D'+zipf(DOCS_TOTAL); }
+    function pickModel(){ return 'm'+(1 + Math.floor(Math.random()*3)); } // m1..m3
+
+    export default function () {
+      const t = pickEndpoint();
+      const user_id = pickUser(t);
+      let path = '/auth?user_id='+user_id;
+      if (t==='features') path = `/features?user_id=${user_id}&model_version=${pickModel()}`;
+      if (t==='document') path = `/document?user_id=${user_id}&document_id=${pickDoc()}`;
+      const url = `${BASE_HOST}${path}`;
+      http.get(url);
+      sleep(0.01);
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-policy
+  namespace: policy
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: k6
+        image: grafana/k6:0.49.0
+        args: ["run", "/scripts/test.js"]
+        env:
+        - name: BASE_HOST
+          value: "http://policy.localtest.me"
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+      volumes:
+      - name: scripts
+        configMap:
+          name: k6-script
+  backoffLimit: 0
