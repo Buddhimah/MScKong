@@ -1,4 +1,3 @@
-# baseline.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,22 +9,57 @@ spec:
     matchLabels: { app: demo-app }
   template:
     metadata:
-      labels:
-        app: demo-app
+      labels: { app: demo-app }
     spec:
+      # Keep baseline on a single pool to force mixed-resource contention
+      nodeSelector:
+        agentpool: cpu     # change/remove if you prefer another pool
+
+      # Seed ~400 docs (~2.5MB each) into /data/docs inside each pod
+      initContainers:
+      - name: seed-docs
+        image: node:18-alpine
+        command: ["sh","-lc"]
+        args:
+          - >
+            apk add --no-cache coreutils >/dev/null;
+            mkdir -p /data/docs;
+            for i in $(seq 1 400); do
+              head -c 2500000 /dev/urandom | base64 | tr -d '\n' |
+              awk -v i=$i '{print "{\"id\":" i ",\"blob\":\"" $0 "\"}"}' > /data/docs/d'"${i}"'.json;
+            done;
+            echo "Seeded $(ls -1 /data/docs | wc -l) files"; ls -lh /data/docs | head -n 10;
+        volumeMounts:
+        - { name: docs, mountPath: /data/docs }
+
       containers:
       - name: demo
-        image: buddhimah/demo-app:4.0.0
-        ports: [{containerPort: 8080}]
+        image: buddhimah/demo-app:5.0.0
+        ports: [{ containerPort: 8080 }]
         env:
-        - name: SHARD_ID
-          value: "baseline"
-        - name: CACHE_TTL_SEC
-          value: "600"
+        - { name: SHARD_ID,        value: "baseline" }
+        - { name: CACHE_TTL_SEC,   value: "1800" }
+        - { name: AUTH_ITER,       value: "240000" }      # CPU workload intensity
+        - { name: FEAT_BYTES,      value: "300000000" }   # ~300MB vector on miss
+        - { name: DOC_DIR,         value: "/data/docs" }  # IO path
         readinessProbe:
           httpGet: { path: /healthz, port: 8080 }
-          initialDelaySeconds: 2
-          periodSeconds: 2
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests: { cpu: "300m", memory: "1Gi" }
+          limits:   { cpu: "1200m", memory: "2Gi" }
+        volumeMounts:
+        - { name: docs, mountPath: /data/docs }
+
+      volumes:
+      - name: docs
+        emptyDir: {}   # identical local ephemeral storage across pods/nodes
+
 ---
 apiVersion: v1
 kind: Service
@@ -37,8 +71,8 @@ spec:
   ports:
   - port: 8080
     targetPort: 8080
+
 ---
-# Ingress to baseline service (no stickiness)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

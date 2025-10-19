@@ -10,11 +10,11 @@ data:
     import exec from 'k6/execution';
 
     // Params
-    const USERS_TOTAL = 2000;
-    const AUTH_USERS = 1000;
-    const FEAT_USERS = 600;
-    const DOC_USERS  = 400;
-    const DOCS_TOTAL = 400;
+    const USERS_TOTAL = 1000;
+    const AUTH_USERS = 500;
+    const FEAT_USERS = 300;
+    const DOC_USERS  = 200;
+    const DOCS_TOTAL = 200;
 
     // Zipfian helper (approx)
     function zipf(n, s=1.1){
@@ -57,7 +57,7 @@ data:
         },
         steady: {
           executor: 'constant-arrival-rate',
-          rate: 60,
+          rate: 30,
           timeUnit: '1s',
           duration: '10m',
           preAllocatedVUs: 60,
@@ -66,7 +66,7 @@ data:
         },
         spike: {
           executor: 'constant-arrival-rate',
-          rate: 120,
+          rate: 40,
           timeUnit: '1s',
           duration: '2m',
           preAllocatedVUs: 120,

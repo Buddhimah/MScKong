@@ -1,82 +1,202 @@
+// server.js — demo-app with real CPU/MEM/IO work and TTL caches
+
 const express = require('express');
-const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// -------------------------------------------------------------------------------------
+// CONFIG (env tunables)
+// -------------------------------------------------------------------------------------
+
+// Process placement info (for logs)
+const REPLICA_ID = process.env.HOSTNAME || 'local';
+const SHARD_ID   = process.env.SHARD_ID || 'baseline';
+
+// HTTP
+const PORT = parseInt(process.env.PORT || '8080', 10);
+
+// Cache TTL (seconds) and per-cache entry caps (simple LRU-ish)
+const CACHE_TTL_SEC   = parseInt(process.env.CACHE_TTL_SEC || '1800', 10); // 30m
+const AUTH_CACHE_CAP  = parseInt(process.env.AUTH_CACHE_CAP || '2000', 10);
+const FEAT_CACHE_CAP  = parseInt(process.env.FEAT_CACHE_CAP || '300', 10);
+const DOC_CACHE_CAP   = parseInt(process.env.DOC_CACHE_CAP  || '1000', 10);
+
+// Real work knobs
+// CPU: number of pbkdf2Sync batches; higher = more CPU time (roughly linear)
+const AUTH_ITER = parseInt(process.env.AUTH_ITER || '180000', 10);
+
+// MEM: bytes to allocate & touch for a feature vector on cache miss
+const FEAT_BYTES = parseInt(process.env.FEAT_BYTES || String(200 * 1024 * 1024), 10); // 200 MB
+
+// IO: where the JSON documents live (PVC mount)
+const DOC_DIR = process.env.DOC_DIR || '/data/docs';
+
+// -------------------------------------------------------------------------------------
+// Simple TTL cache (Map with eviction of oldest when above cap)
+// -------------------------------------------------------------------------------------
+
+function nowMs() { return Date.now(); }
+const TTL_MS = CACHE_TTL_SEC * 1000;
+
+class TtlCache {
+  constructor(capacity) {
+    this.m = new Map();     // key -> { t, v }
+    this.capacity = capacity;
+  }
+  get(key) {
+    const e = this.m.get(key);
+    if (!e) return null;
+    if (nowMs() - e.t > TTL_MS) { this.m.delete(key); return null; }
+    return e.v;
+  }
+  set(key, val) {
+    // If exists, delete to update recency ordering
+    if (this.m.has(key)) this.m.delete(key);
+    this.m.set(key, { t: nowMs(), v: val });
+    // Evict oldest if over capacity
+    while (this.m.size > this.capacity) {
+      const first = this.m.keys().next().value;
+      this.m.delete(first);
+    }
+  }
+  size() { return this.m.size; }
+}
+
+const cacheAuth = new TtlCache(AUTH_CACHE_CAP);
+const cacheFeat = new TtlCache(FEAT_CACHE_CAP);
+const cacheDoc  = new TtlCache(DOC_CACHE_CAP);
+
+// -------------------------------------------------------------------------------------
+// Real work implementations
+// -------------------------------------------------------------------------------------
+
+// CPU work: repeated key derivations
+function doCPUWork(iter) {
+  // Each pbkdf2Sync call burns CPU for a few ms depending on node size.
+  // We batch in chunks to avoid huge single-call costs.
+  const chunk = 4000;
+  for (let i = 0; i < iter; i += chunk) {
+    crypto.pbkdf2Sync('pw' + i, 'salt', 5000, 32, 'sha512');
+  }
+}
+
+// MEM work: allocate and touch a buffer to force physical pages/bandwidth
+function makeFeatureVector(bytes) {
+  const buf = Buffer.allocUnsafe(bytes);
+  for (let i = 0; i < buf.length; i += 4096) buf[i] = (buf[i] + i) & 0xff;
+  return buf;
+}
+
+// IO work: read & parse a JSON document from DOC_DIR (PVC)
+function loadAndParseDoc(docId) {
+  const id = normalizeDocId(docId);
+  const file = path.join(DOC_DIR, `${id}.json`);
+  const data = fs.readFileSync(file);
+  return JSON.parse(data.toString());
+}
+
+// -------------------------------------------------------------------------------------
+// Logging (JSON line per request, ready for jq/analysis)
+// -------------------------------------------------------------------------------------
+
+function logLine(endpoint, user_or_key, cache_hit, latency_ms) {
+  const rec = {
+    ts: new Date().toISOString(),
+    endpoint,
+    user_id: user_or_key, // for features we log "user:model"
+    cache_hit,
+    latency_ms,
+    shard_id: SHARD_ID,
+    replica_id: REPLICA_ID
+  };
+  // one JSON per line
+  console.log(JSON.stringify(rec));
+}
+
+function normalizeDocId(raw) {
+  // ensure filenames like "d186.json" regardless of input "186", "D186", "d186"
+  const s = String(raw || '').trim();
+  const digits = (s.match(/\d+/) || ['0'])[0];
+  return 'd' + digits;                 // always lower-case 'd'
+}
+
+// -------------------------------------------------------------------------------------
+// App
+// -------------------------------------------------------------------------------------
 
 const app = express();
-app.use(express.json());
 
-const REPLICA_ID = process.env.REPLICA_ID || os.hostname();
-const SHARD_ID   = process.env.SHARD_ID   || 'baseline'; // set cpu|mem|io in policy
+// Health and readiness
+app.get('/healthz', (_req, res) => res.status(200).send('ok'));
+app.get('/ready',   (_req, res) => res.status(200).send('ok'));
 
-const AUTH_COLD_MS = parseInt(process.env.AUTH_COLD_MS || '300');
-const FEAT_COLD_MS = parseInt(process.env.FEAT_COLD_MS || '600');
-const DOC_COLD_MS  = parseInt(process.env.DOC_COLD_MS  || '900');
-const HIT_MS_AUTH  = parseInt(process.env.HIT_MS_AUTH  || '2');
-const HIT_MS_FEAT  = parseInt(process.env.HIT_MS_FEAT  || '3');
-const HIT_MS_DOC   = parseInt(process.env.HIT_MS_DOC   || '4');
-const CACHE_TTL_MS = (process.env.CACHE_TTL_SEC ? parseInt(process.env.CACHE_TTL_SEC) : 1800) * 1000;
-
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-// Simple in-process caches
-const cacheAuth     = new Map(); // key: user_id
-const cacheFeatures = new Map(); // key: user_id|model_version
-const cacheDocument = new Map(); // key: document_id
-
-function now() { return new Date().toISOString(); }
-function getUserId(req) { return req.query.user_id || 'u0'; }
-function getModelVer(req) { return req.query.model_version || 'm1'; }
-function getDocId(req) { return req.query.document_id || 'd0'; }
-
-
-
-function getOrSet(cache, key, coldMs) {
-  const now = Date.now();
-  const ent = cache.get(key);
-  if (ent && (now - ent.t) < CACHE_TTL_MS) {
-    return { hit: true, costMs: 0 };
+// CPU path: /auth?user_id=u123
+app.get('/auth', (req, res) => {
+  const uid = req.query.user_id || 'u0';
+  const hit = !!cacheAuth.get(uid);
+  const t0 = nowMs();
+  if (!hit) {
+    doCPUWork(AUTH_ITER);
+    cacheAuth.set(uid, 1);
   }
-  // MISS: set and return cold cost
-  cache.set(key, { t: now });
-  return { hit: false, costMs: coldMs };
-}
-
-async function handle(endpoint, workMs) {
-  // latency = workMs if miss; 1-3ms if hit (simulated)
-  await sleep(workMs);
-  return workMs;
-}
-
-app.get('/healthz', (_, res) => res.status(200).send('ok'));
-
-// /auth
-app.get('/auth', async (req, res) => {
-  const user_id = req.query.user_id || 'u0';
-  const { hit, costMs } = getOrSet(cacheAuth, user_id, AUTH_COLD_MS);
-  const latency = hit ? HIT_MS_AUTH : costMs;
-  await sleep(latency);
-  logAndSend('auth', user_id, hit, latency);
+  const latency = nowMs() - t0;
+  logLine('auth', uid, hit, latency);
+  res.json({ ok: true, cache_hit: hit, latency_ms: latency });
 });
 
-// /features
-app.get('/features', async (req, res) => {
-  const key = `${req.query.user_id || 'u0'}:${req.query.model_version || 'v1'}`;
-  const { hit, costMs } = getOrSet(cacheFeatures, key, FEAT_COLD_MS);
-  const latency = hit ? HIT_MS_FEAT : costMs;
-  await sleep(latency);
-  logAndSend('features', key, hit, latency);
+// MEM path: /features?user_id=u123&model_version=v1
+app.get('/features', (req, res) => {
+  const uid = req.query.user_id || 'u0';
+  const mv  = req.query.model_version || 'v1';
+  const key = `${uid}:${mv}`;
+  let vec = cacheFeat.get(key);
+  const hit = !!vec;
+  const t0 = nowMs();
+  if (!hit) {
+    vec = makeFeatureVector(FEAT_BYTES);
+    cacheFeat.set(key, vec);
+  } else {
+    // light touch to simulate reuse
+    vec[0] ^= 0x1;
+  }
+  const latency = nowMs() - t0;
+  logLine('features', key, hit, latency);
+  res.json({ ok: true, cache_hit: hit, latency_ms: latency });
 });
 
-// /document
-app.get('/document', async (req, res) => {
-  const doc_id = req.query.document_id || 'd0';
-  const { hit, costMs } = getOrSet(cacheDocument, doc_id, DOC_COLD_MS);
-  const latency = hit ? HIT_MS_DOC : costMs;
-  await sleep(latency);
-  logAndSend('document', doc_id, hit, latency);
+/// In your /document handler, wrap in try/catch:
+app.get('/document', (req, res) => {
+  const raw = req.query.document_id || '0';
+  const key = normalizeDocId(raw);
+  let parsed = cacheDoc.get(key);
+  const hit = !!parsed;
+  const t0 = nowMs();
+  if (!hit) {
+    try {
+      parsed = loadAndParseDoc(key);
+      cacheDoc.set(key, parsed);
+    } catch (e) {
+      // Graceful error (don’t crash pod)
+      const latency = nowMs() - t0;
+      logLine('document', key, false, latency);
+      return res.status(404).json({ ok: false, error: 'doc_not_found', id: key });
+    }
+  }
+  const latency = nowMs() - t0;
+  logLine('document', key, hit, latency);
+  res.json({ ok: true, cache_hit: hit, latency_ms: latency });
 });
 
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`demo-app on ${port}`));
+// Startup banner (proves envs were read)
 console.log(JSON.stringify({
-  boot_cfg: { AUTH_COLD_MS, FEAT_COLD_MS, DOC_COLD_MS, HIT_MS_AUTH, HIT_MS_FEAT, HIT_MS_DOC, CACHE_TTL_MS }
+  boot_cfg: {
+    SHARD_ID, REPLICA_ID, PORT,
+    CACHE_TTL_SEC, AUTH_CACHE_CAP, FEAT_CACHE_CAP, DOC_CACHE_CAP,
+    AUTH_ITER, FEAT_BYTES, DOC_DIR
+  }
 }));
+
+app.listen(PORT, () => {
+  console.log(`demo-app listening on :${PORT}`);
+});

@@ -1,11 +1,13 @@
-# policy-shards-router.yaml
+# =========================
+# CPU SHARD
+# =========================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cpu-shard
   namespace: policy
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels: { app: demo-app, shard: cpu }
   template:
@@ -15,17 +17,23 @@ spec:
       nodeSelector: { agentpool: cpu }
       containers:
       - name: demo
-        image: buddhimah/demo-app:4.0.0
-        ports: [{containerPort: 8080}]
+        image: buddhimah/demo-app:5.0.0
+        ports: [{ containerPort: 8080 }]
         env:
-        - name: SHARD_ID
-          value: "cpu"
-        - name: CACHE_TTL_SEC
-          value: "1200"
+        - { name: SHARD_ID,        value: "cpu" }
+        - { name: CACHE_TTL_SEC,   value: "1800" }
+        - { name: AUTH_ITER,       value: "240000" }   # CPU-heavy
         readinessProbe:
           httpGet: { path: /healthz, port: 8080 }
-          initialDelaySeconds: 2
-          periodSeconds: 2
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests: { cpu: "1500m", memory: "512Mi" }
+          limits:   { cpu: "2",     memory: "1Gi" }
 ---
 apiVersion: v1
 kind: Service
@@ -37,14 +45,17 @@ spec:
   ports:
   - port: 8080
     targetPort: 8080
----
+
+# =========================
+# MEM SHARD
+# =========================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mem-shard
   namespace: policy
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels: { app: demo-app, shard: mem }
   template:
@@ -54,17 +65,23 @@ spec:
       nodeSelector: { agentpool: mem }
       containers:
       - name: demo
-        image: buddhimah/demo-app:4.0.0
-        ports: [{containerPort: 8080}]
+        image: buddhimah/demo-app:5.0.0
+        ports: [{ containerPort: 8080 }]
         env:
-        - name: SHARD_ID
-          value: "mem"
-        - name: CACHE_TTL_SEC
-          value: "1200"
+        - { name: SHARD_ID,        value: "mem" }
+        - { name: CACHE_TTL_SEC,   value: "1800" }
+        - { name: FEAT_BYTES,      value: "300000000" }  # MEM-heavy
         readinessProbe:
           httpGet: { path: /healthz, port: 8080 }
-          initialDelaySeconds: 2
-          periodSeconds: 2
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests: { cpu: "200m", memory: "3Gi" }
+          limits:   { cpu: "500m", memory: "4Gi" }
 ---
 apiVersion: v1
 kind: Service
@@ -76,14 +93,17 @@ spec:
   ports:
   - port: 8080
     targetPort: 8080
----
+
+# =========================
+# IO SHARD (emptyDir + init seed)
+# =========================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: io-shard
   namespace: policy
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels: { app: demo-app, shard: io }
   template:
@@ -91,26 +111,45 @@ spec:
       labels: { app: demo-app, shard: io }
     spec:
       nodeSelector: { agentpool: io }
+      initContainers:
+      - name: seed-docs
+        image: node:18-alpine
+        command: ["sh","-lc"]
+        args:
+          - >
+            apk add --no-cache coreutils >/dev/null;
+            mkdir -p /data/docs;
+            for i in $(seq 1 400); do
+              head -c 2500000 /dev/urandom | base64 | tr -d '\n' |
+              awk -v i=$i '{print "{\"id\":" i ",\"blob\":\"" $0 "\"}"}' > /data/docs/d'"${i}"'.json;
+            done;
+            echo "Seeded $(ls -1 /data/docs | wc -l) files"; ls -lh /data/docs | head -n 10;
+        volumeMounts:
+        - { name: docs, mountPath: /data/docs }
       containers:
       - name: demo
-        image: buddhimah/demo-app:4.0.0
-        ports: [{containerPort: 8080}]
+        image: buddhimah/demo-app:5.0.0
+        ports: [{ containerPort: 8080 }]
         env:
-        - name: SHARD_ID
-          value: "io"
-        - name: CACHE_TTL_SEC
-          value: "1200"
-        volumeMounts:
-        - name: data
-          mountPath: /data
+        - { name: SHARD_ID,        value: "io" }
+        - { name: CACHE_TTL_SEC,   value: "1800" }
+        - { name: DOC_DIR,         value: "/data/docs" }  # IO path
         readinessProbe:
           httpGet: { path: /healthz, port: 8080 }
-          initialDelaySeconds: 2
-          periodSeconds: 2
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests: { cpu: "300m", memory: "512Mi" }
+          limits:   { cpu: "1",    memory: "1Gi" }
+        volumeMounts:
+        - { name: docs, mountPath: /data/docs }
       volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: io-pvc
+      - name: docs
+        emptyDir: {}     # identical to baseline
 ---
 apiVersion: v1
 kind: Service
@@ -122,7 +161,10 @@ spec:
   ports:
   - port: 8080
     targetPort: 8080
----
+
+# =========================
+# ROUTER
+# =========================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -139,36 +181,31 @@ spec:
       containers:
       - name: router
         image: buddhimah/routerv2.0
-        ports: [{containerPort: 8081}]
+        ports: [{ containerPort: 8081 }]
         env:
-        - name: CPU_SVC
-          value: "http://cpu-shard.policy.svc.cluster.local:8080"
-        - name: MEM_SVC
-          value: "http://mem-shard.policy.svc.cluster.local:8080"
-        - name: IO_SVC
-          value: "http://io-shard.policy.svc.cluster.local:8080"
-        - name: BETA_LOAD
-          value: "1.0"
-        - name: GAMMA_LOCALITY
-          value: "0.5"
-        - name: T_CPU
-          value: "0.80"
-        - name: T_MEM
-          value: "0.80"
-        - name: T_IO
-          value: "0.80"
-        - name: W
-          value: "90"
-        - name: TAU
-          value: "0.10"
-        - name: STICKY_TTL
-          value: "1200"
-        - name: F
-          value: "20"
+        - { name: CPU_SVC,  value: "http://cpu-shard.policy.svc.cluster.local:8080" }
+        - { name: MEM_SVC,  value: "http://mem-shard.policy.svc.cluster.local:8080" }
+        - { name: IO_SVC,   value: "http://io-shard.policy.svc.cluster.local:8080" }
+        - { name: BETA_LOAD,       value: "1.0" }
+        - { name: GAMMA_LOCALITY,  value: "0.9" }
+        - { name: T_CPU,           value: "0.80" }
+        - { name: T_MEM,           value: "0.80" }
+        - { name: T_IO,            value: "0.80" }
+        - { name: W,               value: "90" }
+        - { name: TAU,             value: "0.10" }
+        - { name: STICKY_TTL,      value: "3600" }
+        - { name: F,               value: "20" }
         readinessProbe:
           httpGet: { path: /healthz, port: 8081 }
-          initialDelaySeconds: 2
-          periodSeconds: 2
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8081 }
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests: { cpu: "200m", memory: "256Mi" }
+          limits:   { cpu: "500m", memory: "512Mi" }
 ---
 apiVersion: v1
 kind: Service
@@ -180,8 +217,10 @@ spec:
   ports:
   - port: 80
     targetPort: 8081
----
-# Ingress to router (sticky cookie enabled)
+
+# =========================
+# Ingress (sticky)
+# =========================
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
