@@ -15,3 +15,13 @@ kubectl create ns baseline
 kubectl create ns policy
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm install ng -n ingress-nginx ingress-nginx/ingress-nginx --create-namespace
+
+kubectl create -f .\configmap-and-job.yaml
+
+kubectl -n baseline logs -f -l app=demo-app --prefix --tail=-1 | Tee-Object -FilePath baseline.jsonl
+kubectl -n policy logs -f -l app=demo-app --prefix --tail=-1 | Tee-Object -FilePath policy_app.jsonl
+kubectl -n policy logs -f -l app=router --prefix --tail=-1 | Tee-Object -FilePath policy_router.jsonl
+
+
+python3 analyze.py baseline.jsonl policy_app.jsonl policy_router.jsonl
+
