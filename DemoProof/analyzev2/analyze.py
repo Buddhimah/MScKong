@@ -1,7 +1,9 @@
-import json, statistics, sys
+import json, statistics, sys, re
 from collections import defaultdict
 
 # Usage: python analyze.py baseline.jsonl policy_app.jsonl policy_router.jsonl
+
+POD_PREFIX_RE = re.compile(r'^\[pod/([^/\]]+)(?:/([^\]]+))?\]\s*')
 
 def pctl(xs, p):
     if not xs: return None
@@ -12,17 +14,65 @@ def pctl(xs, p):
     if f == c: return xs[f]
     return xs[f] + (xs[c]-xs[f]) * (k-f)
 
+def parse_json_from_line(line):
+    """
+    Accept lines like:
+      {"ts": ...}                              # original
+      [pod/name/container] {"ts": ...}         # with --prefix
+    Return (record_dict or None)
+    """
+    if not line:
+        return None
+
+    pod = container = None
+    m = POD_PREFIX_RE.match(line)
+    if m:
+        pod, container = m.group(1), m.group(2)
+        # strip the prefix
+        line = line[m.end():]
+
+    # If there's still any leading noise, start at the first '{'
+    idx = line.find('{')
+    if idx == -1:
+        return None
+    json_str = line[idx:].strip()
+
+    try:
+        rec = json.loads(json_str)
+        # Optionally enrich with pod/container (won't affect your metrics)
+        if pod:
+            rec.setdefault('_pod', pod)
+        if container:
+            rec.setdefault('_container', container)
+        return rec
+    except Exception:
+        return None
+
 def load_jsonl(path):
     rows = []
-    with open(path, 'r', encoding='utf-8') as f:
-      for line in f:
-        line=line.strip()
-        if not line: continue
+    # open in binary mode and decode safely
+    with open(path, 'rb') as f:
+        raw = f.read()
+
+    # try common encodings
+    for enc in ('utf-8-sig', 'utf-16', 'latin-1'):
         try:
-          rows.append(json.loads(line))
-        except:
-          pass
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise UnicodeDecodeError("Could not decode file %s" % path)
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = parse_json_from_line(line)
+        if rec is not None:
+            rows.append(rec)
     return rows
+
 
 def summarize_app(rows, label):
     # rows: {ts, endpoint, user_id, cache_hit, latency_ms, shard_id, replica_id}
@@ -34,10 +84,11 @@ def summarize_app(rows, label):
         ep = r.get('endpoint','unknown')
         if 'latency_ms' in r:
             by_ep[ep].append(r['latency_ms'])
-        if r.get('cache_hit') is True: hits[ep] += 1
+        if r.get('cache_hit') is True:
+            hits[ep] += 1
         total[ep] += 1
-        # No explicit error field; if needed, detect by absence of latency
-        if 'latency_ms' not in r: errors[ep] += 1
+        if 'latency_ms' not in r:
+            errors[ep] += 1
 
     out = {}
     for ep, lat in by_ep.items():
@@ -53,24 +104,25 @@ def summarize_app(rows, label):
 def summarize_router(rows):
     # rows: {endpoint, selected_shard, L, locality, score, sticky_used, diverted}
     by_ep = defaultdict(lambda: {'diverted':0,'total':0})
-    # Shard balance: stddev of r·U (we approximate using L values per selected shard/replica)
-    # During steady window only: filter by ts minutes 2..12? For simplicity, include all and note phases filtered upstream if needed.
     L_by_shard = defaultdict(list)
 
     for r in rows:
         ep = r.get('endpoint','unknown')
         by_ep[ep]['total'] += 1
-        if r.get('diverted'): by_ep[ep]['diverted'] += 1
+        if r.get('diverted'):
+            by_ep[ep]['diverted'] += 1
         L = r.get('L')
         shard = r.get('selected_shard')
         if L is not None and shard:
-            L_by_shard[shard].append(float(L))
+            try:
+                L_by_shard[shard].append(float(L))
+            except Exception:
+                pass
 
     div_rates = { ep: (v['diverted']/v['total'] if v['total'] else 0.0) for ep,v in by_ep.items() }
-    # stddev per shard
     shard_stddev = {}
     for shard, vals in L_by_shard.items():
-        if len(vals)>=2:
+        if len(vals) >= 2:
             shard_stddev[shard] = statistics.pstdev(vals)
         else:
             shard_stddev[shard] = 0.0
@@ -86,7 +138,7 @@ def compare(baseline, policy, div_rates, shard_stddev):
         base_p95 = b.get('p95'); pol_p95 = p.get('p95')
         base_hit = b.get('hit_ratio',0.0); pol_hit = p.get('hit_ratio',0.0)
         delta = None
-        if base_p95 and pol_p95:
+        if base_p95 is not None and pol_p95 is not None and base_p95 != 0:
             delta = (pol_p95 - base_p95) / base_p95 * 100.0
         xhit = (pol_hit/base_hit) if base_hit else None
         div = div_rates.get(ep, 0.0)
@@ -96,19 +148,25 @@ def compare(baseline, policy, div_rates, shard_stddev):
     print("\nShard balance (stddev of r·U proxy L) – lower is better:\n", shard_stddev)
 
 def main():
-    if len(sys.argv)<4:
-      print("Usage: python analyze.py baseline.jsonl policy_app.jsonl policy_router.jsonl")
-      sys.exit(1)
+    if len(sys.argv) < 4:
+        print("Usage: python analyze.py baseline.jsonl policy_app.jsonl policy_router.jsonl")
+        sys.exit(1)
+
     base = load_jsonl(sys.argv[1])
     polA = load_jsonl(sys.argv[2])
     polR = load_jsonl(sys.argv[3])
+
+    # Quick counts (helpful sanity check)
+    print("Counts:")
+    print(" baseline app rows:", len(base))
+    print(" policy app rows:", len(polA))
+    print(" router rows:", len(polR))
 
     baseSum = summarize_app(base, 'baseline')
     polSum  = summarize_app(polA, 'policy')
     div_rates, shard_stddev = summarize_router(polR)
     compare(baseSum, polSum, div_rates, shard_stddev)
 
-    # Success criteria checks
     targets = {
       'auth':     {'p95_impr': 40, 'xhit': 2.0},
       'features': {'p95_impr': 50, 'xhit': 2.5},
@@ -118,7 +176,7 @@ def main():
     ok_all = True
     for ep, t in targets.items():
       b = baseSum.get(ep, {}); p = polSum.get(ep, {})
-      if not b or not p or (b.get('p95') is None) or (p.get('p95') is None):
+      if not b or not p or (b.get('p95') is None) or (p.get('p95') is None) or (b.get('p95') == 0):
         print(f"{ep}: insufficient data"); ok_all=False; continue
       impr = (b['p95'] - p['p95'])/b['p95']*100.0
       xhit = (p['hit_ratio']/b['hit_ratio']) if b['hit_ratio'] else None
@@ -128,13 +186,13 @@ def main():
             f"xHit={round(xhit,2) if xhit is not None else '-'} (>= {t['xhit']}) -> {'OK' if ok_hit else 'FAIL'}")
       ok_all = ok_all and ok_p95 and ok_hit
 
-    # diversion rate (steady-phase-only would be better; here overall proxy)
-    overall_div = sum(polR[i].get('diverted',False) for i in range(len(polR))) / (len(polR) if polR else 1)
+    overall_div = (sum(1 for r in polR if r.get('diverted')) / len(polR)) if polR else 0.0
     print(f"\nDiversion rate (overall proxy): {round(overall_div,3)} (target < 0.10) -> {'OK' if overall_div<0.10 else 'FAIL'}")
 
-    if ok_all and overall_div<0.10:
-      print("\nRESULT: ✅ Success criteria met (check shard stddev & any hot pod durations separately).")
+    if ok_all and overall_div < 0.10:
+        print("\nRESULT: ✅ Success criteria met (check shard stddev & any hot pod durations separately).")
     else:
-      print("\nRESULT: ❌ One or more criteria not met. Inspect per-endpoint stats & router tuning.")
+        print("\nRESULT: ❌ One or more criteria not met. Inspect per-endpoint stats & router tuning.")
+
 if __name__ == "__main__":
     main()

@@ -25,3 +25,20 @@ kubectl -n policy logs -f -l app=router --prefix --tail=-1 | Tee-Object -FilePat
 
 python3 analyze.py baseline.jsonl policy_app.jsonl policy_router.jsonl
 
+
+
+# Restart baseline deployment
+kubectl -n baseline rollout restart deploy/demo-baseline
+kubectl -n baseline rollout status  deploy/demo-baseline
+
+# Restart policy shards + router
+kubectl -n policy rollout restart deploy/cpu-shard
+kubectl -n policy rollout restart deploy/mem-shard
+kubectl -n policy rollout restart deploy/io-shard
+kubectl -n policy rollout restart deploy/router
+kubectl -n policy rollout status  deploy/cpu-shard
+kubectl -n policy rollout status  deploy/mem-shard
+kubectl -n policy rollout status  deploy/io-shard
+kubectl -n policy rollout status  deploy/router
+
+
