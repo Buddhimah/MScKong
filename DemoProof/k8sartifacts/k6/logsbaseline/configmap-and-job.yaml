@@ -10,11 +10,17 @@ data:
     import exec from 'k6/execution';
 
     // Params
-    const USERS_TOTAL = 2000;
-    const AUTH_USERS = 1000;
-    const FEAT_USERS = 600;
-    const DOC_USERS  = 400;
-    const DOCS_TOTAL = 400;
+    // const USERS_TOTAL = 2000;
+    // const AUTH_USERS = 1000;
+    // const FEAT_USERS = 600;
+    // const DOC_USERS  = 400;
+    // const DOCS_TOTAL = 400;
+
+    const USERS_TOTAL = 7;
+    const AUTH_USERS = 3;
+    const FEAT_USERS = 2;
+    const DOC_USERS  = 1;
+    const DOCS_TOTAL = 1;
 
     // Zipfian helper (approx)
     function zipf(n, s=1.1){
